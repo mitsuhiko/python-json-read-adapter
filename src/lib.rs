@@ -82,27 +82,30 @@ impl<R: Read> Read for JsonCompatRead<R> {
 }
 
 fn translate_slice_impl(bytes: &mut [u8], mut state: State) -> State {
-    for c in bytes {
-        let rv = match (state, *c) {
-            (State::Initial, b'N') => (State::NaN0, b'0'),
-            (State::NaN0, b'a') => (State::NaN1, b'.'),
-            (State::NaN1, b'N') => (State::Initial, b'0'),
-            (State::Initial, b'I') => (State::Infinity0, b'0'),
-            (State::Infinity0, b'n') => (State::Infinity1, b'.'),
-            (State::Infinity1, b'f') => (State::Infinity2, b'0'),
-            (State::Infinity2, b'i') => (State::Infinity3, b' '),
-            (State::Infinity3, b'n') => (State::Infinity4, b' '),
-            (State::Infinity4, b'i') => (State::Infinity5, b' '),
-            (State::Infinity5, b't') => (State::Infinity6, b' '),
-            (State::Infinity6, b'y') => (State::Initial, b' '),
-            (State::Initial, b'"') => (State::Quoted, b'"'),
-            (State::Quoted, b'\\') => (State::QuotedEscape, b'\\'),
-            (State::QuotedEscape, c) => (State::Quoted, c),
-            (State::Quoted, b'"') => (State::Initial, b'"'),
-            (state, c) => (state, c),
+    for i in 0..bytes.len() {
+        let (new_state, replace_back): (_, &'static [u8]) = match (state, bytes[i]) {
+            (State::Initial, b'N') => (State::NaN0, b""),
+            (State::NaN0, b'a') => (State::NaN1, b""),
+            (State::NaN1, b'N') => (State::Initial, b"0.0"),
+            (State::Initial, b'I') => (State::Infinity0, b""),
+            (State::Infinity0, b'n') => (State::Infinity1, b""),
+            (State::Infinity1, b'f') => (State::Infinity2, b""),
+            (State::Infinity2, b'i') => (State::Infinity3, b""),
+            (State::Infinity3, b'n') => (State::Infinity4, b""),
+            (State::Infinity4, b'i') => (State::Infinity5, b""),
+            (State::Infinity5, b't') => (State::Infinity6, b""),
+            (State::Infinity6, b'y') => (State::Initial, b"0.0     "),
+            (State::Initial, b'"') => (State::Quoted, b""),
+            (State::Quoted, b'\\') => (State::QuotedEscape, b""),
+            (State::QuotedEscape, _) => (State::Quoted, b""),
+            (State::Quoted, b'"') => (State::Initial, b""),
+            (state, _) => (state, b""),
         };
-        state = rv.0;
-        *c = rv.1;
+        state = new_state;
+
+        for (j, &c) in replace_back.iter().rev().enumerate() {
+            bytes[i - j] = c;
+        }
     }
     state
 }
@@ -153,4 +156,11 @@ fn test_translate_slice() {
     let mut json = br#"{"nan":"nan","Infinity":"-Infinity","other":NaN}"#.to_vec();
     translate_slice(&mut json[..]);
     assert_eq!(&json[..], &b"{\"nan\":\"nan\",\"Infinity\":\"-Infinity\",\"other\":0.0}"[..]);
+}
+
+#[test]
+fn test_no_greedy_write() {
+    let mut json = br#"Inferior"#.to_vec();
+    translate_slice(&mut json[..]);
+    assert_eq!(&json[..], &b"Inferior"[..]);
 }
