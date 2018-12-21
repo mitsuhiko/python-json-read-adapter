@@ -1,37 +1,37 @@
 //! This crate implements a `Read` adapter that converts the invalid JSON
 //! tokens `NaN` and `Infinity` into other tokens without otherwise distorting
 //! the stream.  It achieves this by converting `NaN` and `Infinity` into `0.0`.
-//! 
+//!
 //! This is useful because the Python JSON library traditionally emits invalid
 //! JSON if `NaN` and `Infinity` values are encountered.  If you have to support
 //! clients like this, this wrapper can be used to still deserialize such a
 //! JSON document.
-//! 
+//!
 //! This is just a way to get this to parse and `0.0` is the only value that can
 //! be inserted in a standardized way that fits without changing any of the
 //! positions.
-//! 
+//!
 //! # Example Conversion
-//! 
+//!
 //! The following JSON document:
-//! 
+//!
 //! ```ignore
 //! {"nan":NaN,"inf":Infinity,"-inf":-Infinity}
 //! ```
-//! 
+//!
 //! is thus converted to:
-//! 
+//!
 //! ```ignore
 //! {"nan":0.0,"inf":0.0     ,"-inf":-0.0     }
 //! ```
-//! 
+//!
 //! # serde support
-//! 
+//!
 //! If the `serde` feature is enabled then the crate provides some basic
 //! wrappers around `serde_json` to deserialize quickly and also by running
 //! the conversions.
-use std::io::{self, Read};
 use std::fmt;
+use std::io::{self, Read};
 
 #[cfg(feature = "serde")]
 mod serde_impl;
@@ -69,7 +69,10 @@ impl<R: Read> fmt::Debug for JsonCompatRead<R> {
 impl<R: Read> JsonCompatRead<R> {
     /// Wraps another reader.
     pub fn wrap(reader: R) -> JsonCompatRead<R> {
-        JsonCompatRead { reader, state: State::Initial }
+        JsonCompatRead {
+            reader,
+            state: State::Initial,
+        }
     }
 }
 
@@ -99,7 +102,8 @@ fn translate_slice_impl(bytes: &mut [u8], mut state: State) -> State {
             (State::Quoted, b'\\') => (State::QuotedEscape, b'\\'),
             (State::QuotedEscape, c) => (State::Quoted, c),
             (State::Quoted, b'"') => (State::Initial, b'"'),
-            (state, c) => (state, c),
+            (State::Quoted, c) | (State::Initial, c) => (state, c),
+            (_, c) => (State::Initial, c),
         };
         state = rv.0;
         *c = rv.1;
@@ -108,7 +112,7 @@ fn translate_slice_impl(bytes: &mut [u8], mut state: State) -> State {
 }
 
 /// Translates a slice in place.
-/// 
+///
 /// This works the same as the `JsonCompatRead` struct but instead converts a
 /// slice in place.  This is useful when working with JSON in slices.
 pub fn translate_slice(bytes: &mut [u8]) {
@@ -134,7 +138,10 @@ fn test_reader_string() {
     let mut rv = String::new();
     let read = rdr.read_to_string(&mut rv).unwrap();
     assert_eq!(read, 48);
-    assert_eq!(rv, "{\"nan\":\"nan\",\"Infinity\":\"-Infinity\",\"other\":0.0}");
+    assert_eq!(
+        rv,
+        "{\"nan\":\"nan\",\"Infinity\":\"-Infinity\",\"other\":0.0}"
+    );
 }
 
 #[test]
@@ -152,5 +159,16 @@ fn test_reader_string_escaping() {
 fn test_translate_slice() {
     let mut json = br#"{"nan":"nan","Infinity":"-Infinity","other":NaN}"#.to_vec();
     translate_slice(&mut json[..]);
-    assert_eq!(&json[..], &b"{\"nan\":\"nan\",\"Infinity\":\"-Infinity\",\"other\":0.0}"[..]);
+    assert_eq!(
+        &json[..],
+        &b"{\"nan\":\"nan\",\"Infinity\":\"-Infinity\",\"other\":0.0}"[..]
+    );
+}
+
+#[test]
+fn test_translate_slice_invalid() {
+    let mut json = br#"Inferior,Nax,null,"Infinity",Nen"#.to_vec();
+    translate_slice(&mut json[..]);
+    println!("{}", String::from_utf8_lossy(&json));
+    assert_eq!(&json[..], &br#"0.0erior,0.x,null,"Infinity",0en"#[..]);
 }
