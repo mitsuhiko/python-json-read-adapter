@@ -30,8 +30,6 @@
 //! If the `serde` feature is enabled then the crate provides some basic
 //! wrappers around `serde_json` to deserialize quickly and also by running
 //! the conversions.
-use std::fmt;
-use std::io::{self, Read};
 
 #[cfg(feature = "serde")]
 mod serde_impl;
@@ -52,36 +50,6 @@ enum State {
     Infinity4,
     Infinity5,
     Infinity6,
-}
-
-/// A reader that transparently translates python JSON compat tokens.
-pub struct JsonCompatRead<R> {
-    reader: R,
-    state: State,
-}
-
-impl<R: Read> fmt::Debug for JsonCompatRead<R> {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
-        f.debug_struct("JsonCompatRead").finish()
-    }
-}
-
-impl<R: Read> JsonCompatRead<R> {
-    /// Wraps another reader.
-    pub fn wrap(reader: R) -> JsonCompatRead<R> {
-        JsonCompatRead {
-            reader,
-            state: State::Initial,
-        }
-    }
-}
-
-impl<R: Read> Read for JsonCompatRead<R> {
-    fn read(&mut self, buf: &mut [u8]) -> io::Result<usize> {
-        let read = io::Read::read(&mut self.reader, buf)?;
-        self.state = translate_slice_impl(&mut buf[..read], self.state);
-        Ok(read)
-    }
 }
 
 fn translate_slice_impl(bytes: &mut [u8], mut state: State) -> State {
@@ -123,48 +91,29 @@ pub fn translate_slice(bytes: &mut [u8]) {
 
 #[test]
 fn test_reader_simple() {
-    let json = r#"{"nan":0.0,"inf":Infinity,"-inf":-Infinity}"#;
-    assert_eq!(json.len(), 43);
-    let mut rdr = JsonCompatRead::wrap(json.as_bytes());
-    let mut rv = String::new();
-    let read = rdr.read_to_string(&mut rv).unwrap();
-    assert_eq!(read, 43);
-    assert_eq!(rv, "{\"nan\":0.0,\"inf\":0.0     ,\"-inf\":-0.0     }");
-}
-
-#[test]
-fn test_reader_string() {
-    let json = r#"{"nan":"nan","Infinity":"-Infinity","other":NaN}"#;
-    assert_eq!(json.len(), 48);
-    let mut rdr = JsonCompatRead::wrap(json.as_bytes());
-    let mut rv = String::new();
-    let read = rdr.read_to_string(&mut rv).unwrap();
-    assert_eq!(read, 48);
+    let mut json = br#"{"nan":0.0,"inf":Infinity,"-inf":-Infinity}"#.to_vec();
+    translate_slice(&mut json[..]);
     assert_eq!(
-        rv,
-        "{\"nan\":\"nan\",\"Infinity\":\"-Infinity\",\"other\":0.0}"
+        &json[..],
+        &b"{\"nan\":0.0,\"inf\":0.0     ,\"-inf\":-0.0     }"[..]
     );
 }
 
 #[test]
-fn test_reader_string_escaping() {
-    let json = r#""NaN\"NaN\"NaN""#;
-    assert_eq!(json.len(), 15);
-    let mut rdr = JsonCompatRead::wrap(json.as_bytes());
-    let mut rv = String::new();
-    let read = rdr.read_to_string(&mut rv).unwrap();
-    assert_eq!(read, 15);
-    assert_eq!(rv, r#""NaN\"NaN\"NaN""#);
-}
-
-#[test]
-fn test_translate_slice() {
+fn test_reader_string() {
     let mut json = br#"{"nan":"nan","Infinity":"-Infinity","other":NaN}"#.to_vec();
     translate_slice(&mut json[..]);
     assert_eq!(
         &json[..],
         &b"{\"nan\":\"nan\",\"Infinity\":\"-Infinity\",\"other\":0.0}"[..]
     );
+}
+
+#[test]
+fn test_reader_string_escaping() {
+    let mut json = br#""NaN\"NaN\"NaN""#.to_vec();
+    translate_slice(&mut json[..]);
+    assert_eq!(&json[..], &br#""NaN\"NaN\"NaN""#[..]);
 }
 
 #[test]
